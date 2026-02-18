@@ -7,10 +7,11 @@ const { globSync } = require("glob");
 const args = minimist(process.argv.slice(2));
 const cmd = args._[0];
 
-const runner = (args.runner || "playwright").toLowerCase();
+const runner = String(args.runner || "playwright").toLowerCase();
 const outDir = args.out || "e2e";
 const file = args.component;
 const dir = args.dir;
+const actions = Boolean(args.actions);
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf8");
@@ -20,12 +21,26 @@ function ensureDir(p) {
   fs.mkdirSync(p, { recursive: true });
 }
 
-function extractTestIds(source) {
-  const ids = new Set();
-  const re = /data-testid\s*=\s*["'`]([^"'`]+)["'`]/g;
+function extractTargets(source) {
+  const targets = [];
+  const re =
+    /<([a-zA-Z0-9_-]+)([^>]*?)data-testid\s*=\s*["'`]([^"'`]+)["'`]([^>]*)>/g;
   let m;
-  while ((m = re.exec(source))) ids.add(m[1]);
-  return Array.from(ids);
+  while ((m = re.exec(source))) {
+    const tag = String(m[1]).toLowerCase();
+    const id = m[3];
+    targets.push({ id, tag });
+  }
+  const seen = new Set();
+  const unique = [];
+  for (const t of targets) {
+    const k = `${t.tag}:${t.id}`;
+    if (!seen.has(k)) {
+      seen.add(k);
+      unique.push(t);
+    }
+  }
+  return unique;
 }
 
 function toKebab(name) {
@@ -39,53 +54,134 @@ function fileBase(filePath) {
   return path.basename(filePath).replace(/\.[^/.]+$/, "");
 }
 
-function renderPlaywright(testName, testIds) {
-  const expects = testIds
-    .map((id) => `  await expect(page.getByTestId(${JSON.stringify(id)})).toBeVisible();`)
-    .join("\n");
-  return `import { test, expect } from "@playwright/test";
+function renderPlaywright(testName, targets) {
+  const lines = [];
+  lines.push(`import { test, expect } from "@playwright/test";`);
+  lines.push("");
+  lines.push(`test(${JSON.stringify(testName)}, async ({ page }) => {`);
+  lines.push(`  await page.goto("/");`);
+  lines.push("");
 
-test(${JSON.stringify(testName)}, async ({ page }) => {
-  await page.goto("/");
-${expects ? expects : "  // No data-testid found in source"}
-});
-`;
+  if (!targets.length) {
+    lines.push(`  await expect(page.locator("body")).toBeVisible();`);
+    lines.push("});");
+    lines.push("");
+    return lines.join("\n");
+  }
+
+  for (const { id, tag } of targets) {
+    lines.push(
+      `  await expect(page.getByTestId(${JSON.stringify(id)})).toBeVisible();`
+    );
+
+    if (actions) {
+      if (tag === "button") {
+        lines.push(
+          `  await page.getByTestId(${JSON.stringify(id)}).click();`
+        );
+      } else if (tag === "input") {
+        lines.push(
+          `  await page.getByTestId(${JSON.stringify(id)}).fill("test");`
+        );
+      } else if (tag === "textarea") {
+        lines.push(
+          `  await page.getByTestId(${JSON.stringify(id)}).fill("test");`
+        );
+      } else if (tag === "select") {
+        lines.push(
+          `  await page.getByTestId(${JSON.stringify(
+            id
+          )}).selectOption({ index: 0 });`
+        );
+      }
+    }
+
+    lines.push("");
+  }
+
+  lines.push("});");
+  lines.push("");
+  return lines.join("\n");
 }
 
-function renderCypress(testName, testIds) {
-  const expects = testIds
-    .map((id) => `    cy.get(${JSON.stringify(`[data-testid="${id}"]`)}).should("be.visible");`)
-    .join("\n");
-  return `describe(${JSON.stringify(testName)}, () => {
-  it("renders", () => {
-    cy.visit("/");
-${expects ? expects : "    // No data-testid found in source"}
-  });
-});
-`;
+function renderCypress(testName, targets) {
+  const lines = [];
+  lines.push(`describe(${JSON.stringify(testName)}, () => {`);
+  lines.push(`  it("renders", () => {`);
+  lines.push(`    cy.visit("/");`);
+  lines.push("");
+
+  if (!targets.length) {
+    lines.push(`    cy.get("body").should("be.visible");`);
+    lines.push("  });");
+    lines.push("});");
+    lines.push("");
+    return lines.join("\n");
+  }
+
+  for (const { id, tag } of targets) {
+    lines.push(
+      `    cy.get(${JSON.stringify(
+        `[data-testid="${id.replace(/"/g, '\\"')}"]`
+      )}).should("be.visible");`
+    );
+
+    if (actions) {
+      if (tag === "button") {
+        lines.push(
+          `    cy.get(${JSON.stringify(
+            `[data-testid="${id.replace(/"/g, '\\"')}"]`
+          )}).click();`
+        );
+      } else if (tag === "input" || tag === "textarea") {
+        lines.push(
+          `    cy.get(${JSON.stringify(
+            `[data-testid="${id.replace(/"/g, '\\"')}"]`
+          )}).clear().type("test");`
+        );
+      } else if (tag === "select") {
+        lines.push(
+          `    cy.get(${JSON.stringify(
+            `[data-testid="${id.replace(/"/g, '\\"')}"]`
+          )}).select(0);`
+        );
+      }
+    }
+
+    lines.push("");
+  }
+
+  lines.push("  });");
+  lines.push("});");
+  lines.push("");
+  return lines.join("\n");
 }
 
-function renderTest(testName, testIds) {
-  if (runner === "cypress") return renderCypress(testName, testIds);
-  return renderPlaywright(testName, testIds);
+function renderTest(testName, targets) {
+  if (runner === "cypress") return renderCypress(testName, targets);
+  return renderPlaywright(testName, targets);
 }
 
 function writeTestForComponent(componentPath) {
   const source = readText(componentPath);
-  const ids = extractTestIds(source);
+  const targets = extractTargets(source);
   const base = fileBase(componentPath);
   const testName = `${base} - generated`;
   const ext = runner === "cypress" ? "cy.ts" : "spec.ts";
   const outFile = path.join(outDir, `${toKebab(base)}.${ext}`);
   ensureDir(outDir);
-  fs.writeFileSync(outFile, renderTest(testName, ids), "utf8");
+  fs.writeFileSync(outFile, renderTest(testName, targets), "utf8");
   process.stdout.write(`Generated: ${outFile}\n`);
 }
 
-if (cmd !== "generate") {
+function printUsage() {
   process.stdout.write(
-    "Usage:\n  e2e-testid generate --component src/LoginForm.tsx --runner playwright --out e2e\n  e2e-testid generate --dir src/components --runner cypress --out cypress/e2e\n"
+    "Usage:\n  e2e-testid generate --component src/LoginForm.tsx --runner playwright --out e2e\n  e2e-testid generate --dir src/components --runner cypress --out cypress/e2e\n  e2e-testid generate --dir src/components --runner playwright --out e2e --actions\n"
   );
+}
+
+if (cmd !== "generate") {
+  printUsage();
   process.exit(0);
 }
 
@@ -101,4 +197,5 @@ if (dir) {
 }
 
 process.stderr.write("Error: pass --component <file> or --dir <folder>\n");
+printUsage();
 process.exit(1);
