@@ -11,6 +11,7 @@ const runner = String(args.runner || "playwright").toLowerCase();
 const outDir = args.out || "e2e";
 const file = args.component;
 const dir = args.dir;
+const allowedRunners = new Set(["playwright", "cypress"]);
 
 function readText(filePath) {
   return fs.readFileSync(filePath, "utf8");
@@ -21,7 +22,12 @@ function ensureDir(p) {
 }
 
 function hasForm(source) {
-  return /<form\b[^>]*>/i.test(source) && /<\/form>/i.test(source);
+  if (!/<form\b[^>]*>/i.test(source) || !/<\/form>/i.test(source)) return false;
+  return !formHasOnChange(source);
+}
+
+function formHasOnChange(source) {
+  return /<form\b[^>]*\bonchange\s*=|<form\b[^>]*\bonChange\s*=/i.test(source);
 }
 
 function extractTargets(source) {
@@ -72,6 +78,7 @@ function nextTestId(baseName, tag, counters, usedIds) {
 }
 
 function addMissingTestIds(source, componentPath) {
+  if (formHasOnChange(source)) return { updated: source, added: 0 };
   const usedIds = new Set(extractTargets(source).map((t) => t.id));
   const counters = new Map();
   const base = fileBase(componentPath);
@@ -83,6 +90,7 @@ function addMissingTestIds(source, componentPath) {
     if (/^\s*!/.test(tag)) return full;
     if (/^\/$/.test(tag)) return full;
     if (/\bdata-testid\s*=/.test(attrs || "")) return full;
+    if (/\bonchange\s*=|\bonChange\s*=/.test(attrs || "")) return full;
     const id = nextTestId(base, tag, counters, usedIds);
     const rawAttrs = attrs || "";
     const needsSpace = rawAttrs.length > 0 && /\s$/.test(rawAttrs) ? "" : " ";
@@ -291,8 +299,11 @@ function buildPlaywrightLocator(t) {
 function buildPlaywrightAssertions(t, locatorExpr) {
   const attrs = t.attrs || "";
   const kind = classifyTarget(t).kind;
+  const target = `${locatorExpr}.first()`;
   const lines = [];
-  lines.push(`  await expect(${locatorExpr}).toBeVisible();`);
+  lines.push(`  await expect(${target}).toHaveCount(1);`);
+  lines.push(`  await expect(${target}).toBeAttached();`);
+  lines.push(`  await expect(${target}).toBeVisible();`);
 
   const requiredAttr = hasToken(attrs, "required");
   const disabledAttr = hasToken(attrs, "disabled");
@@ -305,36 +316,36 @@ function buildPlaywrightAssertions(t, locatorExpr) {
   const titleAttr = getAttr(attrs, "title");
   const altAttr = getAttr(attrs, "alt");
 
-  if (requiredAttr) lines.push(`  await expect(${locatorExpr}).toBeRequired();`);
-  if (disabledAttr) lines.push(`  await expect(${locatorExpr}).toBeDisabled();`);
+  if (requiredAttr) lines.push(`  await expect(${target}).toBeRequired();`);
+  if (disabledAttr) lines.push(`  await expect(${target}).toBeDisabled();`);
   if (checkedAttr && (kind === "checkbox" || kind === "radio")) {
-    lines.push(`  await expect(${locatorExpr}).toBeChecked();`);
+    lines.push(`  await expect(${target}).toBeChecked();`);
   }
   if (valueAttr && (kind === "text" || kind === "maybeText")) {
-    lines.push(`  await expect(${locatorExpr}).toHaveValue(${JSON.stringify(valueAttr)});`);
+    lines.push(`  await expect(${target}).toHaveValue(${JSON.stringify(valueAttr)});`);
   }
   if (placeholderAttr) {
     lines.push(
-      `  await expect(${locatorExpr}).toHaveAttribute("placeholder", ${JSON.stringify(
+      `  await expect(${target}).toHaveAttribute("placeholder", ${JSON.stringify(
         placeholderAttr
       )});`
     );
   }
   if (hrefAttr) {
-    lines.push(`  await expect(${locatorExpr}).toHaveAttribute("href", ${JSON.stringify(hrefAttr)});`);
+    lines.push(`  await expect(${target}).toHaveAttribute("href", ${JSON.stringify(hrefAttr)});`);
   }
   if (roleAttr) {
-    lines.push(`  await expect(${locatorExpr}).toHaveRole(${JSON.stringify(roleAttr)});`);
+    lines.push(`  await expect(${target}).toHaveRole(${JSON.stringify(roleAttr)});`);
   }
   if (classAttr) {
     const firstClass = classAttr.trim().split(/\s+/).find(Boolean);
-    if (firstClass) lines.push(`  await expect(${locatorExpr}).toHaveClass(/${escapeRegex(firstClass)}/);`);
+    if (firstClass) lines.push(`  await expect(${target}).toHaveClass(/${escapeRegex(firstClass)}/);`);
   }
   if (titleAttr) {
-    lines.push(`  await expect(${locatorExpr}).toHaveAttribute("title", ${JSON.stringify(titleAttr)});`);
+    lines.push(`  await expect(${target}).toHaveAttribute("title", ${JSON.stringify(titleAttr)});`);
   }
   if (altAttr) {
-    lines.push(`  await expect(${locatorExpr}).toHaveAttribute("alt", ${JSON.stringify(altAttr)});`);
+    lines.push(`  await expect(${target}).toHaveAttribute("alt", ${JSON.stringify(altAttr)});`);
   }
 
   return lines;
@@ -527,13 +538,30 @@ if (cmd !== "generate") {
   process.exit(0);
 }
 
+if (!allowedRunners.has(runner)) {
+  process.stderr.write(`Error: unsupported runner "${runner}". Use "playwright" or "cypress".\n`);
+  process.exit(1);
+}
+
 if (file) {
+  if (!fs.existsSync(file)) {
+    process.stderr.write(`Error: component file not found: ${file}\n`);
+    process.exit(1);
+  }
   writeTestForComponent(file);
   process.exit(0);
 }
 
 if (dir) {
+  if (!fs.existsSync(dir)) {
+    process.stderr.write(`Error: directory not found: ${dir}\n`);
+    process.exit(1);
+  }
   const files = globSync(`${dir}/**/*.{ts,tsx,js,jsx}`);
+  if (!files.length) {
+    process.stderr.write(`Error: no component files found in ${dir}\n`);
+    process.exit(1);
+  }
   files.forEach(writeTestForComponent);
   process.exit(0);
 }
