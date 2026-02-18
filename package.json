@@ -1,0 +1,14 @@
+{
+  "name": "e2e-testid-cli",
+  "version": "1.0.1",
+  "description": "Generate E2E test templates from data-testid usage",
+  "license": "ISC",
+  "type": "commonjs",
+  "bin": {
+    "e2e-testid": "bin/e2e-testid.js"
+  },
+  "dependencies": {
+    "glob": "^10.3.10",
+    "minimist": "^1.2.8"
+  }
+}
