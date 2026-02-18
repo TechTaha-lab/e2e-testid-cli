@@ -83,12 +83,45 @@ function addMissingTestIds(source, componentPath) {
   const counters = new Map();
   const base = fileBase(componentPath);
   let added = 0;
+  const voidTags = new Set([
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
+  ]);
+
+  function hasClosingTagFrom(rawTag, startOffset) {
+    const closingRe = new RegExp(`<\\/${escapeRegex(rawTag)}\\s*>`, "g");
+    closingRe.lastIndex = startOffset;
+    return closingRe.test(source);
+  }
+
+  function isLikelyJsxTag(rawTag, attrs, selfClose, offset, full) {
+    const prevChar = offset > 0 ? source[offset - 1] : "";
+    if (/[A-Za-z0-9_$.]/.test(prevChar)) return false;
+    if ((attrs || "").includes("\n")) return false;
+    const lowerTag = String(rawTag || "").toLowerCase();
+    if (selfClose === "/") return true;
+    if (voidTags.has(lowerTag)) return true;
+    return hasClosingTagFrom(rawTag, offset + full.length);
+  }
 
   const tagRe = /<([A-Za-z][A-Za-z0-9:_-]*)(\s[^<>]*?)?(\/?)>/g;
-  const updated = source.replace(tagRe, (full, tag, attrs, selfClose) => {
+  const updated = source.replace(tagRe, (full, tag, attrs, selfClose, offset) => {
     if (String(full).startsWith("</")) return full;
     if (/^\s*!/.test(tag)) return full;
     if (/^\/$/.test(tag)) return full;
+    if (!isLikelyJsxTag(tag, attrs, selfClose, offset, full)) return full;
     if (/\bdata-testid\s*=/.test(attrs || "")) return full;
     if (/\bonchange\s*=|\bonChange\s*=/.test(attrs || "")) return full;
     const id = nextTestId(base, tag, counters, usedIds);
@@ -433,6 +466,8 @@ function renderPlaywright(testName, targets, formMode, sourceText) {
 
 function renderCypress(testName, targets, formMode) {
   const lines = [];
+  lines.push(`import { describe, it } from "mocha";`);
+  lines.push("");
   lines.push(`describe(${JSON.stringify(testName)}, () => {`);
   lines.push(`  it("generated", () => {`);
   lines.push(`    cy.visit("/");`);
