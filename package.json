@@ -1,14 +1,46 @@
 {
   "name": "e2e-testid-cli",
   "version": "1.0.1",
-  "description": "Generate E2E test templates from data-testid usage",
+  "description": "CLI tool to generate E2E test templates from data-testid usage for Playwright and Cypress.",
   "license": "ISC",
+  "author": "Taha Kourani",
   "type": "commonjs",
   "bin": {
     "e2e-testid": "bin/e2e-testid.js"
   },
+  "keywords": [
+    "e2e",
+    "e2e-testing",
+    "testid",
+    "data-testid",
+    "cli",
+    "code-generator",
+    "test-generator",
+    "playwright",
+    "cypress",
+    "automation",
+    "qa",
+    "frontend-testing",
+    "react-testing",
+    "testing-tools",
+    "developer-tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TechTaha-lab/e2e-testid-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TechTaha-lab/e2e-testid-cli/issues"
+  },
+  "homepage": "https://github.com/TechTaha-lab/e2e-testid-cli#readme",
   "dependencies": {
     "glob": "^10.3.10",
     "minimist": "^1.2.8"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
