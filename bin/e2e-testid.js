@@ -210,12 +210,158 @@ function pickSubmitButton(candidates) {
   return best;
 }
 
-function renderPlaywright(testName, targets, formMode) {
+function escapeRegex(s) {
+  return String(s || "").replace(/[\/.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function regexLiteral(text) {
+  return `/${escapeRegex(text)}/i`;
+}
+
+function inferRoleFromTarget(t) {
+  const attrs = t.attrs || "";
+  const explicitRole = (getAttr(attrs, "role") || "").toLowerCase();
+  if (explicitRole) return explicitRole;
+
+  const tag = (t.tag || "").toLowerCase();
+  const typeAttr = (getAttr(attrs, "type") || "").toLowerCase();
+  if (tag === "button") return "button";
+  if (tag === "a") return "link";
+  if (tag === "select") return "combobox";
+  if (tag === "textarea") return "textbox";
+  if (tag === "img") return "img";
+  if (tag === "h1") return "heading";
+  if (tag === "h2") return "heading";
+  if (tag === "h3") return "heading";
+  if (tag === "h4") return "heading";
+  if (tag === "h5") return "heading";
+  if (tag === "h6") return "heading";
+  if (tag === "input") {
+    if (typeAttr === "checkbox") return "checkbox";
+    if (typeAttr === "radio") return "radio";
+    if (typeAttr === "submit" || typeAttr === "button") return "button";
+    return "textbox";
+  }
+  return "";
+}
+
+function inferAccessibleName(t) {
+  const attrs = t.attrs || "";
+  return (
+    getAttr(attrs, "aria-label") ||
+    getAttr(attrs, "title") ||
+    getAttr(attrs, "alt") ||
+    getAttr(attrs, "name") ||
+    getAttr(attrs, "value") ||
+    ""
+  );
+}
+
+function buildPlaywrightLocator(t) {
+  const attrs = t.attrs || "";
+  const role = inferRoleFromTarget(t);
+  const accessibleName = inferAccessibleName(t);
+  const label = getAttr(attrs, "aria-label") || getAttr(attrs, "label");
+  const placeholder = getAttr(attrs, "placeholder");
+  const alt = getAttr(attrs, "alt");
+  const title = getAttr(attrs, "title");
+  const id = t.id;
+
+  if (role && accessibleName) {
+    return `page.getByRole(${JSON.stringify(role)}, { name: ${JSON.stringify(accessibleName)} })`;
+  }
+  if (role === "heading") {
+    return `page.getByRole("heading")`;
+  }
+  if (label) {
+    return `page.getByLabel(${JSON.stringify(label)})`;
+  }
+  if (placeholder) {
+    return `page.getByPlaceholder(${JSON.stringify(placeholder)})`;
+  }
+  if (alt) {
+    return `page.getByAltText(${JSON.stringify(alt)})`;
+  }
+  if (title) {
+    return `page.getByTitle(${JSON.stringify(title)})`;
+  }
+  return `page.getByTestId(${JSON.stringify(id)})`;
+}
+
+function buildPlaywrightAssertions(t, locatorExpr) {
+  const attrs = t.attrs || "";
+  const kind = classifyTarget(t).kind;
   const lines = [];
+  lines.push(`  await expect(${locatorExpr}).toBeVisible();`);
+
+  const requiredAttr = hasToken(attrs, "required");
+  const disabledAttr = hasToken(attrs, "disabled");
+  const checkedAttr = hasToken(attrs, "checked");
+  const valueAttr = getAttr(attrs, "value");
+  const hrefAttr = getAttr(attrs, "href");
+  const placeholderAttr = getAttr(attrs, "placeholder");
+  const roleAttr = inferRoleFromTarget(t);
+  const classAttr = getAttr(attrs, "class");
+  const titleAttr = getAttr(attrs, "title");
+  const altAttr = getAttr(attrs, "alt");
+
+  if (requiredAttr) lines.push(`  await expect(${locatorExpr}).toBeRequired();`);
+  if (disabledAttr) lines.push(`  await expect(${locatorExpr}).toBeDisabled();`);
+  if (checkedAttr && (kind === "checkbox" || kind === "radio")) {
+    lines.push(`  await expect(${locatorExpr}).toBeChecked();`);
+  }
+  if (valueAttr && (kind === "text" || kind === "maybeText")) {
+    lines.push(`  await expect(${locatorExpr}).toHaveValue(${JSON.stringify(valueAttr)});`);
+  }
+  if (placeholderAttr) {
+    lines.push(
+      `  await expect(${locatorExpr}).toHaveAttribute("placeholder", ${JSON.stringify(
+        placeholderAttr
+      )});`
+    );
+  }
+  if (hrefAttr) {
+    lines.push(`  await expect(${locatorExpr}).toHaveAttribute("href", ${JSON.stringify(hrefAttr)});`);
+  }
+  if (roleAttr) {
+    lines.push(`  await expect(${locatorExpr}).toHaveRole(${JSON.stringify(roleAttr)});`);
+  }
+  if (classAttr) {
+    const firstClass = classAttr.trim().split(/\s+/).find(Boolean);
+    if (firstClass) lines.push(`  await expect(${locatorExpr}).toHaveClass(/${escapeRegex(firstClass)}/);`);
+  }
+  if (titleAttr) {
+    lines.push(`  await expect(${locatorExpr}).toHaveAttribute("title", ${JSON.stringify(titleAttr)});`);
+  }
+  if (altAttr) {
+    lines.push(`  await expect(${locatorExpr}).toHaveAttribute("alt", ${JSON.stringify(altAttr)});`);
+  }
+
+  return lines;
+}
+
+function extractDocumentTitleHint(source) {
+  const assignRe = /document\.title\s*=\s*["'`]([^"'`]+)["'`]/;
+  const assign = assignRe.exec(source);
+  if (assign && assign[1]) return assign[1].trim();
+
+  const titleTagRe = /<title[^>]*>([^<]+)<\/title>/i;
+  const titleTag = titleTagRe.exec(source);
+  if (titleTag && titleTag[1]) return titleTag[1].trim();
+
+  return "";
+}
+
+function renderPlaywright(testName, targets, formMode, sourceText) {
+  const lines = [];
+  const titleHint = extractDocumentTitleHint(sourceText || "");
   lines.push(`import { test, expect } from "@playwright/test";`);
   lines.push("");
   lines.push(`test(${JSON.stringify(testName)}, async ({ page }) => {`);
   lines.push(`  await page.goto("/");`);
+  if (titleHint) {
+    lines.push(`  await expect(page).toHaveTitle(${regexLiteral(titleHint)});`);
+  }
   lines.push("");
 
   if (!targets.length) {
@@ -232,14 +378,13 @@ function renderPlaywright(testName, targets, formMode) {
 
   for (const t of targets) {
     const { kind, post } = classifyTarget(t);
-    const assertLine = `  await expect(page.getByTestId(${JSON.stringify(t.id)})).toBeVisible();`;
+    const loc = buildPlaywrightLocator(t);
+    const assertLines = buildPlaywrightAssertions(t, loc);
 
-    if (formMode && post) postAsserts.push(assertLine);
-    else preAsserts.push(assertLine);
+    if (formMode && post) postAsserts.push(...assertLines);
+    else preAsserts.push(...assertLines);
 
     if (!formMode) continue;
-
-    const loc = `page.getByTestId(${JSON.stringify(t.id)})`;
 
     if (kind === "text") actions.push(`  await ${loc}.fill("test");`);
     else if (kind === "select") actions.push(`  await ${loc}.selectOption({ index: 0 });`);
@@ -345,7 +490,7 @@ function renderCypress(testName, targets, formMode) {
 
 function renderTest(testName, targets, formMode) {
   if (runner === "cypress") return renderCypress(testName, targets, formMode);
-  return renderPlaywright(testName, targets, formMode);
+  return renderPlaywright(testName, targets, formMode, "");
 }
 
 function writeTestForComponent(componentPath) {
@@ -360,7 +505,11 @@ function writeTestForComponent(componentPath) {
   const ext = runner === "cypress" ? "cy.ts" : "spec.ts";
   const outFile = path.join(outDir, `${toKebab(base)}.${ext}`);
   ensureDir(outDir);
-  fs.writeFileSync(outFile, renderTest(testName, targets, hasForm(updated)), "utf8");
+  if (runner === "cypress") {
+    fs.writeFileSync(outFile, renderCypress(testName, targets, hasForm(updated)), "utf8");
+  } else {
+    fs.writeFileSync(outFile, renderPlaywright(testName, targets, hasForm(updated), updated), "utf8");
+  }
   if (added > 0) {
     process.stdout.write(`Updated: ${componentPath} (${added} data-testid)\n`);
   }
