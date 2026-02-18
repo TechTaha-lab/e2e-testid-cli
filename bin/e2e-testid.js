@@ -48,6 +48,52 @@ function extractTargets(source) {
   return unique;
 }
 
+function sanitizePart(v) {
+  return String(v || "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+function nextTestId(baseName, tag, counters, usedIds) {
+  const base = sanitizePart(baseName) || "component";
+  const tagName = sanitizePart(tag) || "element";
+  const current = (counters.get(tagName) || 0) + 1;
+  counters.set(tagName, current);
+  let id = `${base}.${tagName}-${current}`;
+  let i = 1;
+  while (usedIds.has(id)) {
+    i += 1;
+    id = `${base}.${tagName}-${current}-${i}`;
+  }
+  usedIds.add(id);
+  return id;
+}
+
+function addMissingTestIds(source, componentPath) {
+  const usedIds = new Set(extractTargets(source).map((t) => t.id));
+  const counters = new Map();
+  const base = fileBase(componentPath);
+  let added = 0;
+
+  const tagRe = /<([A-Za-z][A-Za-z0-9:_-]*)(\s[^<>]*?)?(\/?)>/g;
+  const updated = source.replace(tagRe, (full, tag, attrs, selfClose) => {
+    if (String(full).startsWith("</")) return full;
+    if (/^\s*!/.test(tag)) return full;
+    if (/^\/$/.test(tag)) return full;
+    if (/\bdata-testid\s*=/.test(attrs || "")) return full;
+    const id = nextTestId(base, tag, counters, usedIds);
+    const rawAttrs = attrs || "";
+    const needsSpace = rawAttrs.length > 0 && /\s$/.test(rawAttrs) ? "" : " ";
+    added += 1;
+    if (selfClose === "/") return `<${tag}${rawAttrs}${needsSpace}data-testid="${id}" />`;
+    return `<${tag}${rawAttrs}${needsSpace}data-testid="${id}">`;
+  });
+
+  return { updated, added };
+}
+
 function toKebab(name) {
   return name
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
@@ -89,6 +135,7 @@ function classifyTarget(t) {
   const isTextareaTag = effectiveTag === "textarea";
   const isSelectTag = effectiveTag === "select";
   const isButtonTag = effectiveTag === "button";
+  const isAnchorTag = effectiveTag === "a";
 
   const id = t.id || "";
   const idHint = id.toLowerCase();
@@ -114,6 +161,7 @@ function classifyTarget(t) {
   if (isTextareaTag) return { kind: "text", post: postSubmitHint };
   if (isSelectTag) return { kind: "select", post: postSubmitHint };
   if (isButtonTag) return { kind: "button", post: postSubmitHint };
+  if (isAnchorTag) return { kind: "link", post: postSubmitHint };
 
   if (isButtonRole) return { kind: "button", post: postSubmitHint };
   if (isCheckboxRole) return { kind: "checkbox", post: postSubmitHint };
@@ -133,7 +181,11 @@ function classifyTarget(t) {
     if (/(radio)/i.test(t.rawTag)) return { kind: "maybeRadio", post: postSubmitHint };
   }
 
-  return { kind: "visible", post: postSubmitHint || /^(div|span|p|h[1-6]|section|article)$/i.test(t.tag) };
+  if (/^(table|thead|tbody|tfoot|tr|th|td|caption|colgroup|col)$/i.test(t.tag)) {
+    return { kind: "visible", post: false };
+  }
+
+  return { kind: "visible", post: postSubmitHint || /^(div|span|p|h[1-6]|section|article|ul|ol|li|nav|aside|main|header|footer)$/i.test(t.tag) };
 }
 
 function pickSubmitButton(candidates) {
@@ -195,6 +247,7 @@ function renderPlaywright(testName, targets, formMode) {
     else if (kind === "radio") actions.push(`  await ${loc}.check();`);
     else if (kind === "combobox") actions.push(`  await ${loc}.click();`);
     else if (kind === "button") buttonIds.push(t.id);
+    else if (kind === "link") actions.push(`  await ${loc}.click();`);
     else if (kind === "maybeText") actions.push(`  await ${loc}.fill("test");`);
     else if (kind === "maybeSelect") actions.push(`  await ${loc}.click();`);
     else if (kind === "maybeCheckbox") actions.push(`  await ${loc}.click();`);
@@ -258,6 +311,7 @@ function renderCypress(testName, targets, formMode) {
     else if (kind === "radio") actions.push(`    cy.get(${JSON.stringify(sel)}).check();`);
     else if (kind === "combobox") actions.push(`    cy.get(${JSON.stringify(sel)}).click();`);
     else if (kind === "button") buttonIds.push(t.id);
+    else if (kind === "link") actions.push(`    cy.get(${JSON.stringify(sel)}).click();`);
     else if (kind === "maybeText") actions.push(`    cy.get(${JSON.stringify(sel)}).type("test");`);
     else if (kind === "maybeSelect") actions.push(`    cy.get(${JSON.stringify(sel)}).click();`);
     else if (kind === "maybeCheckbox") actions.push(`    cy.get(${JSON.stringify(sel)}).click();`);
@@ -296,13 +350,20 @@ function renderTest(testName, targets, formMode) {
 
 function writeTestForComponent(componentPath) {
   const source = readText(componentPath);
-  const targets = extractTargets(source);
+  const { updated, added } = addMissingTestIds(source, componentPath);
+  if (added > 0) {
+    fs.writeFileSync(componentPath, updated, "utf8");
+  }
+  const targets = extractTargets(updated);
   const base = fileBase(componentPath);
   const testName = `${base} - generated`;
   const ext = runner === "cypress" ? "cy.ts" : "spec.ts";
   const outFile = path.join(outDir, `${toKebab(base)}.${ext}`);
   ensureDir(outDir);
-  fs.writeFileSync(outFile, renderTest(testName, targets, hasForm(source)), "utf8");
+  fs.writeFileSync(outFile, renderTest(testName, targets, hasForm(updated)), "utf8");
+  if (added > 0) {
+    process.stdout.write(`Updated: ${componentPath} (${added} data-testid)\n`);
+  }
   process.stdout.write(`Generated: ${outFile}\n`);
 }
 
