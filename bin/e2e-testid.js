@@ -322,18 +322,18 @@ function buildPlaywrightAssertions(target, locatorExpr) {
   const valueAttr = getAttr(attrs, "value");
   const hrefAttr = getAttr(attrs, "href");
   const placeholder = getAttr(attrs, "placeholder");
-  const role = inferRole(target);
+  const explicitRole = (getAttr(attrs, "role") || "").toLowerCase();
   const classAttr = getAttr(attrs, "class");
   const titleAttr = getAttr(attrs, "title");
   const altAttr = getAttr(attrs, "alt");
 
-  if (required) lines.push(`  await expect(${el}).toBeRequired();`);
+  if (required) lines.push(`  await expect(${el}).toHaveAttribute("required", /^(|true|required)$/i);`);
   if (disabled) lines.push(`  await expect(${el}).toBeDisabled();`);
   if (checked && (kind === "checkbox" || kind === "radio")) lines.push(`  await expect(${el}).toBeChecked();`);
   if (valueAttr && (kind === "text" || kind === "maybeText")) lines.push(`  await expect(${el}).toHaveValue(${JSON.stringify(valueAttr)});`);
   if (placeholder) lines.push(`  await expect(${el}).toHaveAttribute("placeholder", ${JSON.stringify(placeholder)});`);
   if (hrefAttr) lines.push(`  await expect(${el}).toHaveAttribute("href", ${JSON.stringify(hrefAttr)});`);
-  if (role) lines.push(`  await expect(${el}).toHaveRole(${JSON.stringify(role)});`);
+  if (explicitRole) lines.push(`  await expect(${el}).toHaveAttribute("role", ${JSON.stringify(explicitRole)});`);
   if (classAttr) {
     const firstClass = classAttr.trim().split(/\s+/).find(Boolean);
     if (firstClass) lines.push(`  await expect(${el}).toHaveClass(/${escapeRegex(firstClass)}/);`);
@@ -422,7 +422,7 @@ function renderCypress(testName, targets, formMode) {
   const actions = [];
   const buttonIds = [];
 
-  lines.push(`import { describe, it } from "mocha";`);
+  lines.push(`/// <reference types="cypress" />`);
   lines.push("");
   lines.push(`describe(${JSON.stringify(testName)}, () => {`);
   lines.push(`  it("generated", () => {`);
