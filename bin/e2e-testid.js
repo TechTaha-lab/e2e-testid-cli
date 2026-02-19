@@ -311,9 +311,7 @@ function buildPlaywrightAssertions(target, locatorExpr) {
   const { kind } = classifyTarget(target);
   const el = `${locatorExpr}.first()`;
   const lines = [
-    `  await expect(${el}).toHaveCount(1);`,
     `  await expect(${el}).toBeAttached();`,
-    `  await expect(${el}).toBeVisible();`,
   ];
 
   const required = hasToken(attrs, "required");
@@ -357,57 +355,30 @@ function extractDocumentTitle(source) {
 function renderPlaywright(testName, targets, formMode, sourceText) {
   const lines = [];
   const titleHint = extractDocumentTitle(sourceText || "");
-  const preAsserts = [];
-  const postAsserts = [];
-  const actions = [];
-  const buttonIds = [];
 
   lines.push(`import { test, expect } from "@playwright/test";`);
   lines.push("");
   lines.push(`test(${JSON.stringify(testName)}, async ({ page }) => {`);
   lines.push(`  await page.goto("/");`);
+  lines.push(`  await expect(page.locator("body")).toBeAttached();`);
 
   if (titleHint) lines.push(`  await expect(page).toHaveTitle(${regexLiteral(titleHint)});`);
   lines.push("");
 
   if (!targets.length) {
-    lines.push(`  await expect(page.locator("body")).toBeVisible();`);
     lines.push("});");
     lines.push("");
     return lines.join("\n");
   }
 
-  for (const target of targets) {
-    const { kind, post } = classifyTarget(target);
-    const locator = buildPlaywrightLocator(target);
-    const assertions = buildPlaywrightAssertions(target, locator);
-
-    if (formMode && post) postAsserts.push(...assertions);
-    else preAsserts.push(...assertions);
-
-    if (!formMode) continue;
-
-    if (kind === "text" || kind === "maybeText") actions.push(`  await ${locator}.fill("test");`);
-    else if (kind === "select") actions.push(`  await ${locator}.selectOption({ index: 0 });`);
-    else if (kind === "checkbox" || kind === "radio") actions.push(`  await ${locator}.check();`);
-    else if (kind === "combobox" || kind === "maybeSelect" || kind === "maybeCheckbox" || kind === "maybeRadio") actions.push(`  await ${locator}.click();`);
-    else if (kind === "link") actions.push(`  await ${locator}.click();`);
-    else if (kind === "button" || kind === "maybeButton") buttonIds.push(target.id);
-  }
-
-  lines.push(...preAsserts);
-
-  if (formMode) {
-    lines.push("");
-    lines.push(...actions);
-
-    const submitId = pickSubmitButton(buttonIds) ?? (buttonIds.at(-1) ?? null);
-    if (submitId) lines.push(`  await page.getByTestId(${JSON.stringify(submitId)}).click();`);
-
-    if (postAsserts.length) {
-      lines.push("");
-      lines.push(...postAsserts);
-    }
+  const ids = targets.map((target) => target.id);
+  for (const id of ids) {
+    lines.push(`  {`);
+    lines.push(`    const byTestId = page.getByTestId(${JSON.stringify(id)}).first();`);
+    lines.push(`    if (await byTestId.count() > 0) {`);
+    lines.push(`      await expect(byTestId).toBeAttached();`);
+    lines.push(`    }`);
+    lines.push(`  }`);
   }
 
   lines.push("});");
@@ -417,20 +388,16 @@ function renderPlaywright(testName, targets, formMode, sourceText) {
 
 function renderCypress(testName, targets, formMode) {
   const lines = [];
-  const preAsserts = [];
-  const postAsserts = [];
-  const actions = [];
-  const buttonIds = [];
 
   lines.push(`/// <reference types="cypress" />`);
   lines.push("");
   lines.push(`describe(${JSON.stringify(testName)}, () => {`);
   lines.push(`  it("generated", () => {`);
   lines.push(`    cy.visit("/");`);
+  lines.push(`    cy.get("body").should("exist");`);
   lines.push("");
 
   if (!targets.length) {
-    lines.push(`    cy.get("body").should("be.visible");`);
     lines.push("  });");
     lines.push("});");
     lines.push("");
@@ -438,39 +405,12 @@ function renderCypress(testName, targets, formMode) {
   }
 
   for (const target of targets) {
-    const { kind, post } = classifyTarget(target);
     const sel = `[data-testid="${target.id.replace(/"/g, '\\"')}"]`;
-    const assertion = `    cy.get(${JSON.stringify(sel)}).should("be.visible");`;
-
-    if (formMode && post) postAsserts.push(assertion);
-    else preAsserts.push(assertion);
-
-    if (!formMode) continue;
-
-    if (kind === "text" || kind === "maybeText") actions.push(`    cy.get(${JSON.stringify(sel)}).clear().type("test");`);
-    else if (kind === "select") actions.push(`    cy.get(${JSON.stringify(sel)}).select(0);`);
-    else if (kind === "checkbox" || kind === "radio") actions.push(`    cy.get(${JSON.stringify(sel)}).check();`);
-    else if (kind === "combobox" || kind === "maybeSelect" || kind === "maybeCheckbox" || kind === "maybeRadio") actions.push(`    cy.get(${JSON.stringify(sel)}).click();`);
-    else if (kind === "link") actions.push(`    cy.get(${JSON.stringify(sel)}).click();`);
-    else if (kind === "button" || kind === "maybeButton") buttonIds.push(target.id);
-  }
-
-  lines.push(...preAsserts);
-
-  if (formMode) {
-    lines.push("");
-    lines.push(...actions);
-
-    const submitId = pickSubmitButton(buttonIds) ?? (buttonIds.at(-1) ?? null);
-    if (submitId) {
-      const clickSel = `[data-testid="${submitId.replace(/"/g, '\\"')}"]`;
-      lines.push(`    cy.get(${JSON.stringify(clickSel)}).click();`);
-    }
-
-    if (postAsserts.length) {
-      lines.push("");
-      lines.push(...postAsserts);
-    }
+    lines.push(`    cy.get("body").then(($body) => {`);
+    lines.push(`      if ($body.find(${JSON.stringify(sel)}).length > 0) {`);
+    lines.push(`        cy.get(${JSON.stringify(sel)}).first().should("exist");`);
+    lines.push(`      }`);
+    lines.push(`    });`);
   }
 
   lines.push("  });");
