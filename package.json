@@ -1,6 +1,6 @@
 {
   "name": "e2e-testid-cli",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "CLI tool to generate E2E test templates from data-testid usage for Playwright and Cypress.",
   "license": "ISC",
   "author": "Taha Kourani",
